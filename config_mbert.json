@@ -1,0 +1,77 @@
+{
+    "name": "contrastive/",
+    "n_gpu": 1,
+
+    "arch": {
+        "type": "BERTDiseaseClassifier",
+        "args": {
+            "model_type" : "mental/mental-bert-base-uncased",
+            "num_symps" : 38
+        }
+    },
+    "data_loader": {
+        "type": "MultiDiseaseDataLoader",
+        "args":{
+            "data_dir": "data/without_control/",
+            "tokenizer_type" : "mental/mental-bert-base-uncased",
+            "batch_size": 64,
+            "shuffle": true,
+            "split" : "train",
+            "bal_sample" : false,
+            "control_ratio" : 0,
+            "max_len" : 64,
+            "uncertain" : "exclude",
+            "num_workers": 2
+        }
+    },
+    "valid_data_loader": {
+        "type": "MultiDiseaseDataLoader",
+        "args":{
+            "data_dir": "data/without_control/",
+            "tokenizer_type" : "mental/mental-bert-base-uncased",
+            "batch_size": 64,
+            "shuffle": false,
+            "split" : "val",
+            "bal_sample" : false,
+            "control_ratio" : 0,
+            "max_len" : 64,
+            "uncertain" : "exclude",
+            "num_workers": 2
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args":{
+            "lr": 3e-4,
+            "weight_decay": 0,
+            "amsgrad": true
+        }
+    },
+    "loss": {
+      "name":"distirbution_balanced_loss",
+      "contrastive":true,
+      "contrastive_gamma":1e-5
+      },
+    "metrics": [
+        "macro_auc", "macro_acc"
+    ],
+    "lr_scheduler": {
+        "type": "ReduceLROnPlateau",
+        "args": {
+            "factor": 0.5, 
+            "patience": 2
+        }
+    },
+    "trainer": {
+        "epochs": 30,
+
+        "save_dir": "saved/",
+        "save_period": 1,
+        "verbosity": 2,
+        
+        "monitor": "max val_macro_auc",
+        "early_stop": 4,
+
+        "tensorboard": true
+    }
+}

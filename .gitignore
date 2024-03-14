@@ -1,0 +1,4 @@
+## Ignore files ##
+
+data/
+secret.json
