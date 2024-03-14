@@ -53,7 +53,7 @@
       "contrastive_gamma":1e-5
       },
     "metrics": [
-        "macro_auc", "macro_acc"
+        "macro_auc", "macro_acc", "macro_f1"
     ],
     "lr_scheduler": {
         "type": "ReduceLROnPlateau",
