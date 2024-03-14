@@ -37,6 +37,22 @@ def macro_auc(all_targets, all_outputs) :
             
     return np.mean(ret)
 
+def macro_f1(all_targets, all_outputs, threshold=0.5) :
+    target_by_class = []
+    output_by_class = []
+    
+    for i in range(all_targets.shape[1]):
+        sel_indices = np.where(all_targets[:, i] != -1)
+        target_by_class.append(all_targets[:, i][sel_indices])
+        output_by_class.append(all_outputs[:, i][sel_indices])
+    
+    ret = []
+    for target, output in zip(target_by_class, output_by_class):
+        pred = (output > threshold).astype(float)
+        ret.append(f1_score(target, pred))
+        
+    return np.mean(ret)
+
 def macro_acc(all_targets, all_outputs, threshold=0.5) :
     target_by_class = []
     output_by_class = []
