@@ -5,7 +5,7 @@ import re
 import torch
 import numpy as np
 import pandas as pd
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer,RobertaTokenizer
 from torch.utils.data import Dataset
 from collections import defaultdict
 
@@ -35,12 +35,12 @@ def infer_preprocess(texts, tokenizer, max_len):
     tokenized = tokenizer(texts, truncation=True, padding='max_length', max_length=max_len)
     processed_batch = {}
     for k in ['input_ids', 'attention_mask', 'token_type_ids']:
-        if k in tokenized:  # roberta has no token_type_ids
+        if k in tokenized:  #  has no token_type_ids
             processed_batch[k] = torch.LongTensor(tokenized[k])
     return processed_batch
 
 class MultiDiseaseDataset(Dataset):
-    def __init__(self, input_dir, tokenizer, max_len, uncertain, split="train"):
+    def __init__(self, input_dir, tokenizer, max_len, uncertain, tokenizer_type, split="train"):
         assert split in {"train", "val", "test"}
         self.input_dir = input_dir
         self.tokenizer = tokenizer
@@ -68,6 +68,8 @@ class MultiDiseaseDataset(Dataset):
             sample = {}
             sample["text"] = row['sentence']
             tokenized = tokenizer(sample["text"], truncation=True, padding='max_length', max_length=max_len)
+            if tokenizer_type=='roberta-base':
+                tokenized = tokenizer.encode_plus(sample["text"], truncation=True, add_special_tokens=True,return_token_type_ids=True,padding='max_length', max_length=max_len)
             for k, v in tokenized.items():
                 sample[k] = v
             self.data.append(sample)
@@ -104,6 +106,6 @@ class MultiDiseaseDataLoader(BaseDataLoader):
         
         self.data_dir = data_dir
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_type, use_auth_token=True)
-        self.dataset = MultiDiseaseDataset(self.data_dir, self.tokenizer, max_len, uncertain, split)
+        self.dataset = MultiDiseaseDataset(self.data_dir, self.tokenizer, max_len, uncertain, tokenizer_type, split)
         
         super().__init__(self.dataset, batch_size, shuffle, split, bal_sample, control_ratio, num_workers, collate_fn)

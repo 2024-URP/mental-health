@@ -3,3 +3,5 @@
 data/
 secret.json
 *.pyc
+__pycache__
+saved/

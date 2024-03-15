@@ -144,3 +144,62 @@ def contrastive_loss(embeds, labels, learning_temp=0.1) :
     loss = torch.sum(loss)
     
     return loss
+
+def asymmetric_loss(outputs, targets, gamma_neg=4, gamma_pos=1, clip=0.05, eps=1e-8, disable_torch_grad_focal_loss=False):
+  lossfn = AsymmetricLossOptimized(gamma_neg, gamma_pos, clip, eps, disable_torch_grad_focal_loss)
+  return lossfn(outputs, targets)
+  
+# 메모리 공간을 효울적으로 사용하기 위해 최적화된 loss함수
+class AsymmetricLossOptimized(nn.Module):
+    ''' Notice - optimized version, minimizes memory allocation and gpu uploading,
+    favors inplace operations'''
+
+    def __init__(self, gamma_neg=4, gamma_pos=1, clip=0.05, eps=1e-8, disable_torch_grad_focal_loss=False):
+        super(AsymmetricLossOptimized, self).__init__()
+
+        self.gamma_neg = gamma_neg # negative 샘플 decay factor γ
+        self.gamma_pos = gamma_pos # positive 샘플 decay factor γ
+        self.clip = clip # asymmetric clipping의 margin
+        self.disable_torch_grad_focal_loss = disable_torch_grad_focal_loss # Torch의 grad를 비활성화할지 여부
+        self.eps = eps # Log의 진수가 0이되지 않게 해주는 epsilon
+
+        # prevent memory allocation and gpu uploading every iteration, and encourages inplace operations
+				# 메모리 확보를 위한 변수 초기화
+        self.targets = self.anti_targets = self.xs_pos = self.xs_neg = self.asymmetric_w = self.loss = None
+
+    def forward(self, output, target):
+        """"
+        Parameters
+        ----------
+        x: input logits
+        y: targets (multi-label binarized vector)
+        """
+
+        self.targets = target # ground truth target
+        self.anti_targets = 1 - target # 실제 target과 반대
+
+        # Calculating Probabilities
+        self.xs_pos = torch.sigmoid(output) # 모델의 출력을 sigmoid 함수로 확률값으로 변환 후, positive sample의 확률로 그대로 사용
+        self.xs_neg = 1.0 - self.xs_pos # negative sample에 대해서는 1에서 뺀 값으로 수정: 모델이 잘 예측한 경우 1에 가까워짐
+
+        # Asymmetric Clipping(shifting)
+        if self.clip is not None and self.clip > 0:
+            self.xs_neg.add_(self.clip).clamp_(max=1) # x_sigmoid가 self.clip 이하인 경우 1로 변환
+
+        # Basic CE calculation, epsilon을 더해줌
+        self.loss = self.targets * torch.log(self.xs_pos.clamp(min=self.eps)) # positive sample에 대한 cross entropy 손실 계산
+        self.loss.add_(self.anti_targets * torch.log(self.xs_neg.clamp(min=self.eps))) # negative sample에 대한 cross entropy 손실 계산
+
+        # Asymmetric Focusing
+        if (self.gamma_neg is not None) or (self.gamma_pos is not None):
+            if self.disable_torch_grad_focal_loss: # gradient 계산 비활성화 설정이 되어있던 경우
+                torch.set_grad_enabled(False) # gradient 계산 비활성화
+            self.xs_pos = self.xs_pos * self.targets # ground truth 값을 곱하여 실제로 positive인 sample에 대한 확률만 남김
+            self.xs_neg = self.xs_neg * self.anti_targets # 실제로 negative인 sample에 대한 1-p 확률만 남김
+            self.asymmetric_w = torch.pow(1 - self.xs_pos - self.xs_neg,
+                                          self.gamma_pos * self.targets + self.gamma_neg * self.anti_targets) # 각 확률에 곱해질 가중치 계산
+            if self.disable_torch_grad_focal_loss:
+                torch.set_grad_enabled(True) # gradient 계산 활성화
+            self.loss *= self.asymmetric_w # 각 확률에 가중치를 곱해줌
+
+        return -self.loss.sum(),-self.loss.sum()
