@@ -1,0 +1,68 @@
+{
+    "name": "RoBERTaawithASL",
+    "n_gpu": 1,
+
+    "arch": {
+        "type": "RoBERTDiseaseClassifier",
+        "args": {
+            "num_symps" : 38
+        }
+    },
+    "data_loader": {
+        "type": "MultiDiseaseDataLoader",
+        "args":{
+            "data_dir": "data/without_control/",
+            "tokenizer_type" : "roberta-base",
+            "batch_size": 64,
+            "shuffle": true,
+            "split" : "train",
+            "bal_sample" : false,
+            "control_ratio" : 0,
+            "max_len" : 64,
+            "uncertain" : "exclude",
+            "num_workers": 2
+        }
+    },
+    "valid_data_loader": {
+        "type": "MultiDiseaseDataLoader",
+        "args":{
+            "data_dir": "data/without_control/",
+            "tokenizer_type" : "roberta-base",
+            "batch_size": 64,
+            "shuffle": false,
+            "split" : "val",
+            "bal_sample" : false,
+            "control_ratio" : 0,
+            "max_len" : 64,
+            "uncertain" : "exclude",
+            "num_workers": 2
+        }
+    },
+    "optimizer": {
+        "type": "AdamW",
+        "args":{
+            "lr": 2e-5,
+            "weight_decay": 1e-6
+        }
+    },
+    "loss": {
+      "name":"asymmetric_loss",
+      "contrastive":false,
+      "contrastive_gamma":1e-5
+      },
+    "metrics": [
+        "macro_auc", "macro_acc", "macro_f1"
+    ],
+    "trainer": {
+        "epochs": 30,
+
+        "save_dir": "saved/",
+        "save_period": 1,
+        "verbosity": 2,
+        
+        "monitor": "max val_macro_auc",
+        "early_stop": 3,
+
+        "tensorboard": true
+    }
+}
