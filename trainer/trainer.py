@@ -4,8 +4,7 @@ from torchvision.utils import make_grid
 from base import BaseTrainer
 from utils import inf_loop, MetricTracker
 from model.loss import contrastive_loss
-from collections import defaultdict
-from sklearn.metrics import classification_report
+from model.metric import print_classification_report
 
 class Trainer(BaseTrainer):
     """
@@ -14,10 +13,19 @@ class Trainer(BaseTrainer):
     def __init__(self, model, criterion, contrastive, metric_ftns, optimizer, config, device,
                  data_loader, valid_data_loader=None, lr_scheduler=None, len_epoch=None):
         super().__init__(model, criterion, metric_ftns, optimizer, config)
+        
         self.config = config
         self.device = device
         self.data_loader = data_loader
+        
+        # for contrastive loss
         self.contrastive, self.contrastive_gamma = contrastive
+        
+        # for metrics
+        self.num_labels = config["arch"]["args"]["num_symps"]
+        self.threshold = config["metrics"]["threshold"]
+        self.metric_target = config["metrics"]['target']
+                
         if len_epoch is None:
             # epoch-based training
             self.len_epoch = len(self.data_loader)
@@ -25,6 +33,7 @@ class Trainer(BaseTrainer):
             # iteration-based training
             self.data_loader = inf_loop(data_loader)
             self.len_epoch = len_epoch
+            
         self.valid_data_loader = valid_data_loader
         self.do_validation = self.valid_data_loader is not None
         self.lr_scheduler = lr_scheduler
@@ -32,9 +41,6 @@ class Trainer(BaseTrainer):
 
         self.train_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
         self.valid_metrics = MetricTracker('loss', *[m.__name__ for m in self.metric_ftns], writer=self.writer)
-
-        self.train_outputs = defaultdict(list)
-        self.valid_outputs = defaultdict(list)
         
     def _train_epoch(self, epoch):
         """
@@ -46,15 +52,17 @@ class Trainer(BaseTrainer):
         best = self.model.train()
         self.train_metrics.reset()
 
+        all_targets = np.array([])
+        all_outputs = np.array([])
+
         for batch_idx, (data, target, mask) in enumerate(self.data_loader):
             input_ids, attention_mask, token_type_ids = data['input_ids'], data['attention_mask'], data['token_type_ids']
             input_ids, attention_mask, token_type_ids = input_ids.to(self.device), attention_mask.to(self.device), token_type_ids.to(self.device)
             target, mask = target.to(self.device), mask.to(self.device)
             
             self.optimizer.zero_grad()
-            embeds, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
-            
-            full_loss, loss = self.criterion(output, target, mask)
+            embeds, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)       
+            _, loss = self.criterion(output, target, mask)
 
             # contrastive learning
             if self.contrastive : 
@@ -64,40 +72,37 @@ class Trainer(BaseTrainer):
             loss.backward()
             self.optimizer.step()
             
-            prob = torch.sigmoid(output)
-
-            self.train_outputs['loss'].append(loss)
-            self.train_outputs['targets'].append(target)
-            self.train_outputs['outputs'].append(prob)
-            self.train_outputs['full_loss'].append(torch.mean(full_loss, axis=0))  
+            self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
+            self.train_metrics.update("loss", loss.item())
             
-            if batch_idx % self.log_step == 0: # single 실험에는 꺼도 됨
-                print('Train Epoch : {} {}'.format(epoch, self._progress(batch_idx)))
+            output = torch.sigmoid(output)
+
+            if batch_idx == 0 :
+              all_targets = target.detach().cpu().numpy()
+              all_outputs = output.detach().cpu().numpy()
+            else :
+              all_targets = np.concatenate((all_targets, target.detach().cpu().numpy()), axis=0)            
+              all_outputs = np.concatenate((all_outputs, output.detach().cpu().numpy()), axis=0)
+  
+            
+            if batch_idx % self.log_step == 0:
+                print('Train Epoch : {} {}'.format(epoch, self._progress(batch_idx), loss.item()))
                 
             if batch_idx == self.len_epoch:
                 break
-        
-        avg_loss = torch.stack(self.train_outputs['loss']).mean().detach().cpu().item()
-        all_targets = np.concatenate([x.detach().cpu().numpy() for x in self.train_outputs['targets']])
-        all_outputs = np.concatenate([x.detach().cpu().numpy() for x in self.train_outputs['outputs']])
-        avg_full_loss = np.mean([x.detach().cpu().numpy() for x in self.train_outputs['full_loss']], axis=0)
-    
-        self.writer.set_step((epoch - 1))
-        self.train_metrics.update('loss', avg_loss)
-        
-        for met in self.metric_ftns:
-            self.train_metrics.update(met.__name__, met(all_targets, all_outputs))
 
-        self.logger.debug('Train Epoch: {} Loss: {:.6f}'.format(epoch, avg_loss))
+        all_targets = torch.from_numpy(all_targets)
+        all_outputs = torch.from_numpy(all_outputs)
+
+        for met in self.metric_ftns:
+            self.train_metrics.update(met.__name__, met(self.threshold, self.num_labels, all_targets, all_outputs))
         
         log = self.train_metrics.result()
-        log.update({'full_loss' : avg_full_loss})
-        
-        self.train_outputs.clear()
 
         if self.do_validation:
             val_log = self._valid_epoch(epoch)
             log.update(**{'val_'+k : v for k, v in val_log.items()})
+            log.update({"report" : self.report})
 
         #if self.lr_scheduler is not None:
         #    self.lr_scheduler.step()
@@ -114,6 +119,10 @@ class Trainer(BaseTrainer):
         self.model.eval()
         self.valid_metrics.reset()
         with torch.no_grad():
+            
+            all_targets = np.array([])
+            all_outputs = np.array([])
+        
             for batch_idx, (data, target, mask) in enumerate(self.valid_data_loader):
                 input_ids, attention_mask, token_type_ids = data['input_ids'], data['attention_mask'], data['token_type_ids']
                 input_ids, attention_mask, token_type_ids = input_ids.to(self.device), attention_mask.to(self.device), token_type_ids.to(self.device)
@@ -128,41 +137,27 @@ class Trainer(BaseTrainer):
                     c_loss = contrastive_loss(embeds, target, learning_temp=10)
                     loss = loss + self.contrastive_gamma*c_loss
               
-                prob = torch.sigmoid(output)
-
-                self.valid_outputs['loss'].append(loss)
-                self.valid_outputs['targets'].append(target)
-                self.valid_outputs['outputs'].append(prob)                
+                output = torch.sigmoid(output)
+                if batch_idx == 0 :
+                    all_targets = target.detach().cpu().numpy()
+                    all_outputs = output.detach().cpu().numpy()
+                else :
+                    all_targets = np.concatenate((all_targets, target.detach().cpu().numpy()), axis=0)            
+                    all_outputs = np.concatenate((all_outputs, output.detach().cpu().numpy()), axis=0)
+           
                     
-            avg_loss = torch.stack(self.valid_outputs['loss']).mean().detach().cpu().item()
-            all_targets = np.concatenate([x.detach().cpu().numpy() for x in self.valid_outputs['targets']])
-            all_outputs = np.concatenate([x.detach().cpu().numpy() for x in self.valid_outputs['outputs']])
-
-            self.writer.set_step((epoch - 1), 'valid')
-            self.valid_metrics.update('loss', avg_loss)
+                self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
+                self.valid_metrics.update('loss', loss.item())
+        
+        all_targets = torch.from_numpy(all_targets)
+        all_outputs = torch.from_numpy(all_outputs)
             
-            for met in self.metric_ftns:
-                self.valid_metrics.update(met.__name__, met(all_targets, all_outputs))
+        for met in self.metric_ftns:
+            self.valid_metrics.update(met.__name__, met(self.threshold, self.num_labels, all_targets, all_outputs))
 
-            # ### single
-            # all_outputs = np.where(all_outputs<0.5, 0, 1)
-            # report = classification_report(all_targets, all_outputs)
-            # self.logger.info(report)
-            # ###
-            
-            ### multi 
-            all_outputs = np.where(all_outputs<0.5, 0, 1) 
-            for i in range(all_targets.shape[1]):
-                sel_indices = np.where(all_targets[:, i] != -1)
-                report = classification_report(all_targets[:, i][sel_indices], all_outputs[:, i][sel_indices])
-                self.logger.info(f'======== {i} report==========')
-                self.logger.info(report)
-            ###
-
-            self.valid_outputs.clear()
-
+        self.report = print_classification_report(self.threshold, all_targets, all_outputs)
+        
         # add histogram of model parameters to the tensorboard
-        self.writer.add_text('classification report', report)
         for name, p in self.model.named_parameters():
             self.writer.add_histogram(name, p, bins='auto')
         return self.valid_metrics.result()

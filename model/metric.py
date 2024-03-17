@@ -1,27 +1,16 @@
 import torch
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 import numpy as np
 
-def accuracy(output, target):
-    with torch.no_grad():
-        pred = torch.argmax(output, dim=1)
-        assert pred.shape[0] == len(target)
-        correct = 0
-        correct += torch.sum(pred == target).item()
-    return correct / len(target)
+from sklearn.metrics import roc_auc_score
+from torchmetrics.classification import MultilabelAccuracy, MultilabelPrecision, MultilabelRecall, MultilabelF1Score
+from sklearn.metrics import classification_report
 
-def top_k_acc(output, target, k=3):
-    with torch.no_grad():
-        pred = torch.topk(output, k, dim=1)[1]
-        assert pred.shape[0] == len(target)
-        correct = 0
-        for i in range(k):
-            correct += torch.sum(pred[:, i] == target).item()
-    return correct / len(target)
 
-def macro_auc(all_targets, all_outputs) :
+def auc(threshold, num_labels, all_targets, all_outputs) :
     target_by_class = []
     output_by_class = []
+    
+    all_outputs = np.where(all_outputs<threshold, 0, 1) 
     
     for i in range(all_targets.shape[1]):
         sel_indices = np.where(all_targets[:, i] != -1)
@@ -37,34 +26,33 @@ def macro_auc(all_targets, all_outputs) :
             
     return np.mean(ret)
 
-def macro_f1(all_targets, all_outputs, threshold=0.5) :
-    target_by_class = []
-    output_by_class = []
-    
-    for i in range(all_targets.shape[1]):
-        sel_indices = np.where(all_targets[:, i] != -1)
-        target_by_class.append(all_targets[:, i][sel_indices])
-        output_by_class.append(all_outputs[:, i][sel_indices])
-    
-    ret = []
-    for target, output in zip(target_by_class, output_by_class):
-        pred = (output > threshold).astype(float)
-        ret.append(f1_score(target, pred))
-        
-    return np.mean(ret)
+def accuracy(threshold, num_labels, all_targets, all_outputs) :
+    metric_fn = MultilabelAccuracy(threshold=threshold, num_labels=num_labels)
+    all_targets[all_targets==-1] = 0 # missing label
+    score = metric_fn(all_outputs, all_targets)
+    return score 
 
-def macro_acc(all_targets, all_outputs, threshold=0.5) :
-    target_by_class = []
-    output_by_class = []
-    
-    for i in range(all_targets.shape[1]):
-        sel_indices = np.where(all_targets[:, i] != -1)
-        target_by_class.append(all_targets[:, i][sel_indices])
-        output_by_class.append(all_outputs[:, i][sel_indices])
-    
-    ret = []
-    for target, output in zip(target_by_class, output_by_class):
-        pred = (output > threshold).astype(float)
-        ret.append(np.mean(target == pred))
-            
-    return np.mean(ret)
+def precision(threshold, num_labels, all_targets, all_outputs) :
+    metric_fn = MultilabelPrecision(threshold=threshold, num_labels=num_labels)
+    all_targets[all_targets==-1] = 0 # missing label
+    score = metric_fn(all_outputs, all_targets)
+    return score 
+
+def recall(threshold, num_labels, all_targets, all_outputs) :
+    metric_fn = MultilabelRecall(threshold=threshold, num_labels=num_labels)
+    all_targets[all_targets==-1] = 0 # missing label
+    score = metric_fn(all_outputs, all_targets)
+    return score 
+
+def f1_score(threshold, num_labels, all_targets, all_outputs) :
+    metric_fn = MultilabelF1Score(threshold=threshold, num_labels=num_labels)
+    all_targets[all_targets==-1] = 0 # missing label
+    score = metric_fn(all_outputs, all_targets)
+    return score 
+
+def print_classification_report(threshold, all_targets, all_outputs) :
+    all_targets[all_targets==-1] = 0 # missing label
+    all_outputs = torch.where(all_outputs<threshold, 0, 1)
+    report = classification_report(all_targets, all_outputs, output_dict=True)
+    print(report)
+    return report
