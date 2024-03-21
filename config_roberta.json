@@ -1,5 +1,5 @@
 {
-    "name": "RoBERTaawithASL",
+    "name": "RoBERTawithASL",
     "n_gpu": 1,
 
     "arch": {
@@ -50,9 +50,10 @@
       "contrastive":false,
       "contrastive_gamma":1e-5
       },
-    "metrics": [
-        "macro_auc", "macro_acc", "macro_f1"
-    ],
+    "metrics": {
+        "target" : ["auc", "accuracy", "precision", "recall", "f1_score"],
+        "threshold" : 0.5
+    },
     "trainer": {
         "epochs": 30,
 
