@@ -1,9 +1,9 @@
 {
-    "name": "RoBERTawithASL",
+    "name": "RoBERTawithDBL",
     "n_gpu": 1,
 
     "arch": {
-        "type": "RoBERTDiseaseClassifier",
+        "type": "RoBERTaDiseaseClassifier",
         "args": {
             "num_symps" : 38
         }
@@ -46,10 +46,10 @@
         }
     },
     "loss": {
-      "name":"asymmetric_loss",
-      "contrastive":false,
-      "contrastive_gamma":1e-5
-      },
+        "name":"distirbution_balanced_loss",
+        "contrastive":false,
+        "contrastive_gamma":1e-5
+    },
     "metrics": {
         "target" : ["auc", "accuracy", "precision", "recall", "f1_score"],
         "threshold" : 0.5

@@ -24,7 +24,7 @@ class BERTDiseaseClassifier(BaseModel):
         logits = self.clf(x2)
         return x, logits
 
-class RoBERTDiseaseClassifier(BaseModel):
+class RoBERTaDiseaseClassifier(BaseModel):
     def __init__(self, num_symps):
         super().__init__()
         self.roberta = AutoModel.from_pretrained('roberta-base') # 사전학습된 BERT 모델 불러오기
@@ -33,7 +33,7 @@ class RoBERTDiseaseClassifier(BaseModel):
         # 이진 분류를 위한 활성화함수
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, **kwargs):
-        x, features = self.roberta(input_ids, attention_mask = attention_mask, token_type_ids = token_type_ids, return_dict=False) # primate 데이터로 파인튜닝
+        x, features = self.roberta(input_ids, attention_mask = attention_mask, token_type_ids = token_type_ids, return_dict=False)
         #output_2 = self.l2(output_1)
         output = self.fc(features) # 선형 레이어 학습
         return x, output
