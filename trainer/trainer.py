@@ -90,8 +90,8 @@ class Trainer(BaseTrainer):
                 
             if batch_idx == self.len_epoch:
                 break
-
-        all_targets = torch.from_numpy(all_targets)
+        #print(all_targets)
+        all_targets = torch.from_numpy(all_targets) # batch_size x 38
         all_outputs = torch.from_numpy(all_outputs)
 
         for met in self.metric_ftns:
