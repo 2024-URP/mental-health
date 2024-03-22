@@ -68,7 +68,7 @@ class MultiDiseaseDataset(Dataset):
             sample = {}
             sample["text"] = row['sentence']
             tokenized = tokenizer(sample["text"], truncation=True, padding='max_length', max_length=max_len)
-            if tokenizer_type=='roberta-base':
+            if 'roberta-base' in tokenizer_type:
                 tokenized = tokenizer.encode_plus(sample["text"], truncation=True, add_special_tokens=True,return_token_type_ids=True,padding='max_length', max_length=max_len)
             for k, v in tokenized.items():
                 sample[k] = v
