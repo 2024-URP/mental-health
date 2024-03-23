@@ -61,12 +61,13 @@ class Trainer(BaseTrainer):
             target, mask = target.to(self.device), mask.to(self.device)
             
             self.optimizer.zero_grad()
-            embeds, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)       
+            
+            last_hidden_state, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)       
             _, loss = self.criterion(output, target, mask)
 
             # contrastive learning
             if self.contrastive : 
-                c_loss = contrastive_loss(embeds, target, learning_temp=10)
+                c_loss = contrastive_loss(last_hidden_state[:,0,:], target, learning_temp=10)
                 loss = loss + self.contrastive_gamma*c_loss
                 
             loss.backward()
@@ -90,6 +91,7 @@ class Trainer(BaseTrainer):
                 
             if batch_idx == self.len_epoch:
                 break
+            
         #print(all_targets)
         all_targets = torch.from_numpy(all_targets) # batch_size x 38
         all_outputs = torch.from_numpy(all_outputs)
@@ -129,12 +131,12 @@ class Trainer(BaseTrainer):
                 target = target.to(self.device)
                 mask = mask.to(self.device)
                 
-                embeds, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+                last_hidden_state, output = self.model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
                 _, loss = self.criterion(output, target, mask)
                 
                 # contrastive learning
                 if self.contrastive : 
-                    c_loss = contrastive_loss(embeds, target, learning_temp=10)
+                    c_loss = contrastive_loss(last_hidden_state[:,0,:], target, learning_temp=10)
                     loss = loss + self.contrastive_gamma*c_loss
               
                 output = torch.sigmoid(output)
