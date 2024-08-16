@@ -4,7 +4,10 @@ warnings.filterwarnings("ignore")
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel
+import torch.nn.functional as F
+from transformers import AutoModel, AutoTokenizer
+from .torch_gcn import GCN
+from .torch_gat import GAT
 
 
 class BERTDiseaseClassifier(BaseModel):
@@ -72,3 +75,92 @@ class CNNDiseaseClassifier(BaseModel):
         out = self.fc(out)
         
         return None, out
+
+class BertClassifier(torch.nn.Module):
+    def __init__(self, pretrained_model='roberta_base', nb_class=20):
+        super(BertClassifier, self).__init__()
+        self.nb_class = nb_class
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+        self.bert_model = AutoModel.from_pretrained(pretrained_model)
+        self.feat_dim = list(self.bert_model.modules())[-2].out_features # BERT 모델의 출력 차원
+        self.classifier = torch.nn.Linear(self.feat_dim, nb_class)
+
+    def forward(self, input_ids, attention_mask):
+        cls_feats = self.bert_model(input_ids, attention_mask)[0][:, 0]
+        cls_logit = self.classifier(cls_feats)
+        return cls_logit
+
+
+class BertGCN(torch.nn.Module):
+    def __init__(self, pretrained_model='roberta_base', nb_class=20, m=0.7, gcn_layers=2, n_hidden=200, dropout=0.5):
+        super(BertGCN, self).__init__()
+        self.m = m
+        self.nb_class = nb_class
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+        self.bert_model = AutoModel.from_pretrained(pretrained_model)
+        self.feat_dim = list(self.bert_model.modules())[-2].out_features # bert_model의 forward에서 거치는 과정에서 마지막 선형레이어의 출력 차원(제일 마지막 과정은 tanh())
+        self.classifier = torch.nn.Linear(self.feat_dim, nb_class) # 클래스 개수만큼 예측을 할 수 있도록 클래스 개수 크기만큼 출력
+        self.gcn = GCN(
+            in_feats=self.feat_dim,
+            n_hidden=n_hidden,
+            n_classes=nb_class,
+            n_layers=gcn_layers-1,
+            activation=F.elu,
+            dropout=dropout
+        ) # 사전에 정의해둔 GCN 모델: 최종 출력은 클래스 개수 크기
+
+    def forward(self, g, idx):
+        
+        input_ids, attention_mask = g.ndata['input_ids'][idx], g.ndata['attention_mask'][idx] # 입력된 인덱스에 대해서만 그래프의 feature로 저장해둔 본문 토큰화결과와 attention mask을 꺼내옴
+        if self.training: # 학습 중일 때 
+            cls_feats = self.bert_model(input_ids, attention_mask)[0][:, 0] # BERT 모델을 통해 얻은 각 document마다 제일 첫번째 단어의 representation만 가져옴
+            g.ndata['cls_feats'][idx] = cls_feats # 그래프의 cls_feat의 해당 인덱스 부분을 BERT의 출력값으로 대체함
+        else:
+            cls_feats = g.ndata['cls_feats'][idx] # 학습중이 아니면 그래프의 cls_feat의 해당 인덱스 부분을 가져옴  
+        cls_logit = self.classifier(cls_feats) # 768차원 벡터를 분류기에 넣음
+        cls_pred = torch.nn.Sigmoid()(cls_logit) # 어떤 클래스에 속할지 예측함
+        gcn_logit = self.gcn(g.ndata['cls_feats'], g, g.edata['edge_weight'])[idx] # 그래프에 저장된 cls_feats을 각 document의 feature(입력)으로, 그래프, weight를 입력받아서 메세지 패싱을 하고 주어진 인덱스에 대해서만 뽑아냄
+        gcn_pred = torch.nn.Sigmoid()(gcn_logit) # 어떤 클래스에 속할지 예측함
+        pred = (gcn_pred+1e-10) * self.m + cls_pred * (1 - self.m) # self.m으로 두 예측의 비율 조정
+        pred = torch.log(pred) # 로그 씌우기
+        return pred # 예측값 출력
+        '''
+        gcn_logit = self.gcn(g.ndata['cls_feats'], g, g.edata['edge_weight'])[idx] # 그래프에 저장된 cls_feats을 각 document의 feature(입력)으로, 그래프, weight를 입력받아서 메세지 패싱을 하고 주어진 인덱스에 대해서만 뽑아냄
+        gcn_pred = torch.nn.Softmax(dim=1)(gcn_logit)+1e-10
+        return gcn_pred
+        '''
+    
+class BertGAT(torch.nn.Module):
+    def __init__(self, pretrained_model='roberta_base', nb_class=20, m=0.7, gcn_layers=2, heads=8, n_hidden=32, dropout=0.5):
+        super(BertGAT, self).__init__()
+        self.m = m
+        self.nb_class = nb_class
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+        self.bert_model = AutoModel.from_pretrained(pretrained_model)
+        self.feat_dim = list(self.bert_model.modules())[-2].out_features
+        self.classifier = torch.nn.Linear(self.feat_dim, nb_class)
+        self.gcn = GAT(
+                 num_layers=gcn_layers-1,
+                 in_dim=self.feat_dim,
+                 num_hidden=n_hidden,
+                 num_classes=nb_class,
+                 heads=[heads] * (gcn_layers-1) + [1],
+                 activation=F.elu,
+                 feat_drop=dropout,
+                 attn_drop=dropout,
+        )
+
+    def forward(self, g, idx):
+        input_ids, attention_mask = g.ndata['input_ids'][idx], g.ndata['attention_mask'][idx]
+        if self.training:
+            cls_feats = self.bert_model(input_ids, attention_mask)[0][:, 0]
+            g.ndata['cls_feats'][idx] = cls_feats
+        else:
+            cls_feats = g.ndata['cls_feats'][idx]
+        cls_logit = self.classifier(cls_feats)
+        cls_pred = torch.nn.Softmax(dim=1)(cls_logit)
+        gcn_logit = self.gcn(g.ndata['cls_feats'], g)[idx]
+        gcn_pred = torch.nn.Softmax(dim=1)(gcn_logit)
+        pred = (gcn_pred+1e-10) * self.m + cls_pred * (1 - self.m)
+        pred = torch.log(pred)
+        return pred
